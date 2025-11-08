@@ -1,0 +1,3 @@
+[submodule "external/claude-agent-sdk"]
+	path = external/claude-agent-sdk
+	url = https://github.com/anthropics/claude-agent-sdk-python.git

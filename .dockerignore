@@ -1,0 +1,80 @@
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Documentation (keep only essentials)
+*.md
+!README.md
+
+# Logs
+*.log
+
+# Database files
+*.db
+*.sqlite3
+chroma_data/
+vector_db/
+
+# Cache
+.cache/
+*.cache
+
+# Docker files (avoid recursion)
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Output directories
+output/
+tmp/
+
+# Test data
+tests/fixtures/
+/tmp/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Development scripts
+scripts/
+dev/

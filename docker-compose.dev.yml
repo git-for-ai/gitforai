@@ -1,0 +1,144 @@
+# Docker Compose configuration for GitForAI Development
+# Development environment with hot-reload and testing capabilities
+
+version: '3.8'
+
+services:
+  # Main development container
+  dev:
+    build:
+      context: .
+      target: development
+    image: gitforai:dev
+    container_name: gitforai-dev
+
+    # Mount source code for live editing
+    volumes:
+      - .:/app  # Mount entire project directory
+      - ./repos:/repos:ro  # Repositories to analyze
+      - ./output:/output  # Output directory
+      - gitforai-dev-cache:/cache  # Cache directory
+      - gitforai-venv:/opt/venv  # Persist virtual environment
+      - gitforai-dev-state:/home/gitforai/.gitforai  # State directory for incremental updates
+
+    # Environment variables
+    environment:
+      - LOG_LEVEL=DEBUG
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      # Add your API keys for testing (or use .env file)
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+
+    # Keep container running
+    stdin_open: true
+    tty: true
+
+    # Override command for interactive shell
+    command: /bin/bash
+
+    # Working directory
+    working_dir: /app
+
+    # Network
+    networks:
+      - gitforai-dev-network
+
+  # Test runner service
+  test:
+    build:
+      context: .
+      target: development
+    image: gitforai:dev
+    container_name: gitforai-test
+
+    volumes:
+      - .:/app
+      - gitforai-test-cache:/cache
+
+    environment:
+      - LOG_LEVEL=DEBUG
+      - PYTHONUNBUFFERED=1
+
+    # Run tests
+    command: pytest tests/ -v --cov=src/gitforai --cov-report=html --cov-report=term
+
+    working_dir: /app
+
+    networks:
+      - gitforai-dev-network
+
+    # Don't restart on failure
+    restart: "no"
+
+  # Code formatter/linter service
+  lint:
+    build:
+      context: .
+      target: development
+    image: gitforai:dev
+    container_name: gitforai-lint
+
+    volumes:
+      - .:/app
+
+    # Run linters and formatters
+    command: >
+      sh -c "
+        echo '=== Running Black ===' &&
+        black --check src/ tests/ &&
+        echo '=== Running Ruff ===' &&
+        ruff check src/ tests/ &&
+        echo '=== Running MyPy ===' &&
+        mypy src/
+      "
+
+    working_dir: /app
+
+    networks:
+      - gitforai-dev-network
+
+    restart: "no"
+
+  # Interactive Python shell with gitforai loaded
+  shell:
+    build:
+      context: .
+      target: development
+    image: gitforai:dev
+    container_name: gitforai-shell
+
+    volumes:
+      - .:/app
+      - ./repos:/repos:ro
+      - gitforai-dev-cache:/cache
+      - gitforai-dev-state:/home/gitforai/.gitforai
+
+    environment:
+      - PYTHONUNBUFFERED=1
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+
+    stdin_open: true
+    tty: true
+
+    command: python -i -c "from gitforai.extraction import GitExtractor; from gitforai.models import *; from gitforai.llm import *; print('GitForAI development shell loaded with LLM support')"
+
+    working_dir: /app
+
+    networks:
+      - gitforai-dev-network
+
+volumes:
+  gitforai-dev-cache:
+    driver: local
+  gitforai-test-cache:
+    driver: local
+  gitforai-venv:
+    driver: local
+  gitforai-dev-state:
+    driver: local
+
+networks:
+  gitforai-dev-network:
+    driver: bridge

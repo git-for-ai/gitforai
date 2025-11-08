@@ -1,0 +1,71 @@
+# Docker Compose configuration for GitForAI
+# Production/CLI usage
+
+version: '3.8'
+
+services:
+  gitforai:
+    build:
+      context: .
+      target: runtime
+    image: gitforai:latest
+    container_name: gitforai-cli
+
+    # Mount local directories
+    volumes:
+      # Mount repository to analyze (customize path as needed)
+      - ./repos:/repos:ro  # Read-only access to repositories
+      - ./output:/output   # Output directory for extracted data
+      - gitforai-cache:/cache  # Cache directory for embeddings/LLM responses
+      - gitforai-vectordb:/vectordb  # Vector database persistent storage
+      - gitforai-state:/home/gitforai/.gitforai  # State directory for incremental updates
+
+    # Environment variables (override with .env file)
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PYTHONUNBUFFERED=1
+      # Embedding provider (default: local, no API key needed)
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-local}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
+      # LLM API keys (optional - only required for openai provider)
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4-turbo-preview}
+      # Vector database configuration
+      - VECTORDB_PROVIDER=${VECTORDB_PROVIDER:-chroma}
+      - VECTORDB_PERSIST_DIR=${VECTORDB_PERSIST_DIR:-/vectordb}
+      - VECTORDB_BATCH_SIZE=${VECTORDB_BATCH_SIZE:-100}
+
+    # Override default command
+    # Uncomment and modify as needed:
+    # command: extract /repos/myrepo --output /output/commits.json
+
+    # Resource limits (optional)
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+    # Network mode
+    network_mode: bridge
+
+    # Restart policy
+    restart: "no"
+
+# Named volumes for persistence
+volumes:
+  gitforai-cache:
+    driver: local
+  gitforai-vectordb:
+    driver: local
+  gitforai-state:
+    driver: local
+
+# Networks (for future multi-service setup)
+networks:
+  default:
+    name: gitforai-network
