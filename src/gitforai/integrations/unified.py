@@ -412,3 +412,100 @@ class UnifiedTaskIntelligence:
             >>> mermaid = intel.get_graph_export('mermaid')
         """
         return self.bv.graph_export(format)
+
+    def replay_git_history(
+        self,
+        from_commit: Optional[str] = None,
+        create_beads_tasks: bool = False,
+        dry_run: bool = True,
+        branch: str = "HEAD",
+        md_file_patterns: List[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Replay git history to extract task intelligence from MD files and commits
+
+        Walks through git commit history chronologically from the first commit (or a specified
+        starting point) to HEAD, extracting task information from:
+        - Markdown files (TASK_*.md, TODO.md, README.md sections)
+        - Commit messages and references
+        - File change patterns
+
+        This reconciles scattered documentation with actual implementation history to
+        build a comprehensive tasklist with priorities based on historical patterns.
+
+        Args:
+            from_commit: Starting commit hash (default: first commit in repo)
+            create_beads_tasks: If True, create beads tasks for extracted tasks (default: False)
+            dry_run: If True, only analyze without creating tasks (default: True)
+            branch: Branch to analyze (default: HEAD)
+            md_file_patterns: Glob patterns for MD files to analyze (default: ['**/*.md'])
+
+        Returns:
+            Dictionary containing:
+            - tasks_found: Number of tasks extracted
+            - commits_analyzed: Number of commits processed
+            - md_files_analyzed: List of MD files processed
+            - tasks_by_status: Breakdown by status (new, in_progress, completed, abandoned)
+            - priority_distribution: Tasks by priority level (1-5)
+            - task_timeline: Chronological task events
+            - top_priority_tasks: High-priority open tasks
+            - all_tasks: Complete list of TaskState objects
+            - recommendations: Suggested next steps
+
+        Example:
+            >>> result = intel.replay_git_history(dry_run=True)
+            >>> print(f"Found {result['summary']['tasks_found']} tasks")
+            >>> print(f"High priority tasks: {len(result['top_priority_tasks'])}")
+            >>>
+            >>> # Create beads tasks from results
+            >>> result = intel.replay_git_history(create_beads_tasks=True, dry_run=False)
+        """
+        from gitforai.extraction.git_extractor import GitExtractor
+        from gitforai.models.config import RepositoryConfig
+        from gitforai.integrations.replay import GitHistoryReplayEngine
+
+        logger.info(f"Starting git history replay for {self.config.repo_path}")
+        logger.info(f"Dry run: {dry_run}, Create tasks: {create_beads_tasks}")
+
+        # Initialize GitExtractor
+        repo_config = RepositoryConfig(repo_path=self.config.repo_path)
+        git_extractor = GitExtractor(repo_config)
+
+        # Initialize replay engine
+        replay_engine = GitHistoryReplayEngine(self.config, git_extractor)
+
+        # Run replay
+        result = replay_engine.replay_history(
+            from_commit=from_commit,
+            branch=branch,
+            md_file_patterns=md_file_patterns
+        )
+
+        logger.info(f"Replay complete: {result.tasks_found} tasks found")
+
+        # Optionally create beads tasks
+        tasks_created = 0
+        if create_beads_tasks and not dry_run:
+            logger.info("Creating beads tasks from replay results...")
+
+            for task in result.tasks:
+                # Only create tasks that are open or in progress
+                if task.status in ['new', 'in_progress']:
+                    try:
+                        self.bd.create(
+                            title=task.title,
+                            description=task.description or f"Task extracted from git history replay\n\nFirst seen: {task.first_seen_commit[:7]}\nLast updated: {task.last_updated_commit[:7]}\nRelated commits: {len(task.related_commits)}",
+                            task_type='task',
+                            priority=task.priority or 3
+                        )
+                        tasks_created += 1
+                        logger.debug(f"Created beads task: {task.task_id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to create beads task for {task.task_id}: {e}")
+
+            logger.info(f"Created {tasks_created} beads tasks")
+
+        result_dict = result.to_dict()
+        result_dict['tasks_created'] = tasks_created if create_beads_tasks and not dry_run else 0
+
+        return result_dict
