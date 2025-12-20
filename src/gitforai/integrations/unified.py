@@ -485,12 +485,28 @@ class UnifiedTaskIntelligence:
 
         # Optionally create beads tasks
         tasks_created = 0
+        tasks_skipped = 0
         if create_beads_tasks and not dry_run:
             logger.info("Creating beads tasks from replay results...")
+
+            # Get existing tasks to check for duplicates
+            try:
+                existing_tasks = self.bd.list_all(status='open')
+                existing_titles = {task.get('title', ''): task.get('id', '') for task in existing_tasks}
+                logger.info(f"Found {len(existing_titles)} existing open tasks")
+            except Exception as e:
+                logger.warning(f"Failed to fetch existing tasks, proceeding without deduplication: {e}")
+                existing_titles = {}
 
             for task in result.tasks:
                 # Only create tasks that are open or in progress
                 if task.status in ['new', 'in_progress']:
+                    # Check if task with same title already exists
+                    if task.title in existing_titles:
+                        tasks_skipped += 1
+                        logger.debug(f"Skipped duplicate task: {task.title} (existing ID: {existing_titles[task.title]})")
+                        continue
+
                     try:
                         self.bd.create(
                             title=task.title,
@@ -503,9 +519,10 @@ class UnifiedTaskIntelligence:
                     except Exception as e:
                         logger.warning(f"Failed to create beads task for {task.task_id}: {e}")
 
-            logger.info(f"Created {tasks_created} beads tasks")
+            logger.info(f"Created {tasks_created} beads tasks, skipped {tasks_skipped} duplicates")
 
         result_dict = result.to_dict()
         result_dict['tasks_created'] = tasks_created if create_beads_tasks and not dry_run else 0
+        result_dict['tasks_skipped'] = tasks_skipped if create_beads_tasks and not dry_run else 0
 
         return result_dict
