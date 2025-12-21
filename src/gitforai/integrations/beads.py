@@ -257,7 +257,8 @@ class BeadsClient:
         task_type: str = "task",
         priority: int = 3,
         assignee: Optional[str] = None,
-        blocks: Optional[List[str]] = None
+        parent: Optional[str] = None,
+        deps: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """Create a new task
 
@@ -267,7 +268,8 @@ class BeadsClient:
             task_type: Type of task ('task', 'bug', 'epic', etc.)
             priority: Priority level (1-5, default: 3)
             assignee: Optional assignee
-            blocks: Optional list of task IDs this task blocks
+            parent: Optional parent task ID for hierarchical relationship
+            deps: Optional list of dependency specs (e.g., ['blocks:task-id', 'bd-123'])
 
         Returns:
             Created task details
@@ -277,7 +279,8 @@ class BeadsClient:
             ...     title="Add authentication",
             ...     description="Implement JWT authentication",
             ...     task_type="task",
-            ...     priority=1
+            ...     priority=1,
+            ...     parent="epic-id"
             ... )
         """
         args = [
@@ -292,9 +295,10 @@ class BeadsClient:
             args.extend(['--description', description])
         if assignee:
             args.extend(['--assignee', assignee])
-        if blocks:
-            for block_id in blocks:
-                args.extend(['--blocks', block_id])
+        if parent:
+            args.extend(['--parent', parent])
+        if deps:
+            args.extend(['--deps', ','.join(deps)])
 
         result = self._run_command(args)
 
@@ -401,6 +405,26 @@ class BeadsClient:
             return result
         else:
             raise BeadsError(f"Unexpected response from 'bd comment': {type(result)}")
+
+    def add_dependency(
+        self,
+        task_id: str,
+        depends_on_id: str,
+        dep_type: str = "blocks"
+    ) -> None:
+        """Add a dependency between tasks
+
+        Args:
+            task_id: Task that depends on another
+            depends_on_id: Task that this task depends on (blocks task_id)
+            dep_type: Type of dependency ('blocks', 'related', 'parent-child', 'discovered-from')
+
+        Example:
+            >>> # Phase 1 blocks Phase 2
+            >>> client.add_dependency("phase2-id", "phase1-id", dep_type="blocks")
+        """
+        args = ['dep', 'add', task_id, depends_on_id, '--type', dep_type]
+        self._run_command(args, expect_json=False)
 
     def sync(self) -> str:
         """Sync tasks with remote

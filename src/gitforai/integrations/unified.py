@@ -486,6 +486,7 @@ class UnifiedTaskIntelligence:
         # Optionally create beads tasks
         tasks_created = 0
         tasks_skipped = 0
+        sections_created = 0
         if create_beads_tasks and not dry_run:
             logger.info("Creating beads tasks from replay results...")
 
@@ -498,31 +499,131 @@ class UnifiedTaskIntelligence:
                 logger.warning(f"Failed to fetch existing tasks, proceeding without deduplication: {e}")
                 existing_titles = {}
 
+            # STEP 1: Create parent tasks for sections (epics/phases)
+            section_id_map = {}  # section_id -> beads_task_id
+            section_title_map = {}  # section_title -> beads_task_id (for dependency resolution)
+            if result.sections:
+                logger.info(f"Creating {len(result.sections)} section parent tasks...")
+
+                for section in result.sections:
+                    # Skip if duplicate
+                    if section.title in existing_titles:
+                        beads_id = existing_titles[section.title]
+                        section_id_map[section.section_id] = beads_id
+                        section_title_map[section.title] = beads_id
+                        logger.debug(f"Section already exists: {section.title}")
+                        continue
+
+                    try:
+                        parent_task = self.bd.create(
+                            title=section.title,
+                            description=section.description or f"Parent task for {section.title}\n\nFile: {section.file_path}\nLevel: {'#' * section.level}",
+                            task_type='epic',  # Sections become epics
+                            priority=1  # Phases are high priority
+                        )
+                        section_id_map[section.section_id] = parent_task['id']
+                        section_title_map[section.title] = parent_task['id']
+                        sections_created += 1
+                        logger.info(f"Created section epic: {section.title} (ID: {parent_task['id']})")
+                    except Exception as e:
+                        logger.error(f"Failed to create section task for {section.title}: {e}")
+
+                # Handle phase dependencies (now title-based)
+                if replay_engine.task_tracker.section_dependencies:
+                    logger.info(f"Processing {len(replay_engine.task_tracker.section_dependencies)} phase dependencies...")
+                    logger.info(f"Section title map has {len(section_title_map)} entries")
+
+                    for from_title, to_title in replay_engine.task_tracker.section_dependencies:
+                        # Dependencies are now title-based, look up beads IDs directly
+                        from_beads_id = section_title_map.get(from_title)
+                        to_beads_id = section_title_map.get(to_title)
+
+                        logger.info(f"Dependency: {from_title} -> {to_title}")
+                        logger.info(f"  Beads IDs: {from_beads_id} -> {to_beads_id}")
+
+                        if from_beads_id and to_beads_id:
+                            try:
+                                # Add dependency: "to" task depends on "from" task (from blocks to)
+                                self.bd.add_dependency(
+                                    task_id=to_beads_id,
+                                    depends_on_id=from_beads_id,
+                                    dep_type="blocks"
+                                )
+                                logger.info(f"✓ Added dependency: {from_beads_id} blocks {to_beads_id}")
+                            except Exception as e:
+                                logger.warning(f"Failed to add phase dependency: {e}")
+                        else:
+                            logger.warning(f"Could not resolve titles to beads IDs: {from_title} -> {to_title}")
+
+            # STEP 2: Create child tasks with parent references
+            task_id_to_beads_id = {}  # Map task_id -> beads_task_id for dependency creation
+
             for task in result.tasks:
                 # Only create tasks that are open or in progress
                 if task.status in ['new', 'in_progress']:
                     # Check if task with same title already exists
                     if task.title in existing_titles:
                         tasks_skipped += 1
-                        logger.debug(f"Skipped duplicate task: {task.title} (existing ID: {existing_titles[task.title]})")
+                        beads_id = existing_titles[task.title]
+                        task_id_to_beads_id[task.task_id] = beads_id  # Map existing task
+                        logger.debug(f"Skipped duplicate task: {task.title} (existing ID: {beads_id})")
                         continue
 
+                    # Find parent section if task has one
+                    parent_id = None
+                    for md_task in result.sections:
+                        for t in md_task.tasks:
+                            if t.task_id == task.task_id and t.parent_section:
+                                parent_id = section_id_map.get(t.parent_section)
+                                break
+                        if parent_id:
+                            break
+
                     try:
-                        self.bd.create(
+                        created_task = self.bd.create(
                             title=task.title,
                             description=task.description or f"Task extracted from git history replay\n\nFirst seen: {task.first_seen_commit[:7]}\nLast updated: {task.last_updated_commit[:7]}\nRelated commits: {len(task.related_commits)}",
                             task_type='task',
-                            priority=task.priority or 3
+                            priority=task.priority or 3,
+                            parent=parent_id  # Link to parent epic
                         )
                         tasks_created += 1
-                        logger.debug(f"Created beads task: {task.task_id}")
+                        task_id_to_beads_id[task.task_id] = created_task['id']  # Map new task
+                        if parent_id:
+                            logger.debug(f"Created beads task: {task.task_id} (parent: {parent_id})")
+                        else:
+                            logger.debug(f"Created beads task: {task.task_id}")
                     except Exception as e:
                         logger.warning(f"Failed to create beads task for {task.task_id}: {e}")
 
-            logger.info(f"Created {tasks_created} beads tasks, skipped {tasks_skipped} duplicates")
+            logger.info(f"Created {sections_created} section epics, {tasks_created} tasks, skipped {tasks_skipped} duplicates")
+
+            # STEP 3: Create file-based dependencies (Layer 4)
+            if result.file_dependencies:
+                logger.info("Layer 4: Creating file co-change dependencies in beads...")
+                deps_created = 0
+                for task1_id, task2_id, dep_type in result.file_dependencies:
+                    beads_task1 = task_id_to_beads_id.get(task1_id)
+                    beads_task2 = task_id_to_beads_id.get(task2_id)
+
+                    if beads_task1 and beads_task2:
+                        try:
+                            self.bd.add_dependency(
+                                task_id=beads_task1,
+                                depends_on_id=beads_task2,
+                                dep_type=dep_type  # "related" for file co-change
+                            )
+                            deps_created += 1
+                        except Exception as e:
+                            logger.warning(f"Failed to create file dependency {beads_task1} -> {beads_task2}: {e}")
+
+                logger.info(f"✓ Created {deps_created} file-based dependencies ({dep_type})")
+            else:
+                logger.debug("No file-based dependencies to create")
 
         result_dict = result.to_dict()
         result_dict['tasks_created'] = tasks_created if create_beads_tasks and not dry_run else 0
         result_dict['tasks_skipped'] = tasks_skipped if create_beads_tasks and not dry_run else 0
+        result_dict['sections_created'] = sections_created if create_beads_tasks and not dry_run else 0
 
         return result_dict
