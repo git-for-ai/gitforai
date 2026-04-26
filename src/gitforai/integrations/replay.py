@@ -14,6 +14,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Iterator
 
+from .document_classifier import MarkdownDocumentClassifier, DocumentType
+
 logger = logging.getLogger(__name__)
 
 
@@ -390,6 +392,7 @@ class MarkdownHierarchyParser:
 
     def __init__(self):
         self.md_parser = MarkdownTaskParser()
+        self.classifier = MarkdownDocumentClassifier()
 
     def parse_file_with_hierarchy(
         self,
@@ -403,6 +406,16 @@ class MarkdownHierarchyParser:
         Returns:
             Tuple of (sections, tasks_with_parents)
         """
+        # Classify document first to determine extraction strategy
+        classification = self.classifier.classify(file_path, content)
+
+        # Skip files that shouldn't be extracted
+        if classification.doc_type == DocumentType.SKIP:
+            logger.info(f"Skipping {file_path}: {classification.reason}")
+            return [], []
+
+        logger.debug(f"Classifying {file_path} as {classification.doc_type.name}: {classification.reason}")
+
         sections = []
         all_tasks = []
         current_section = None
@@ -417,6 +430,14 @@ class MarkdownHierarchyParser:
             if header_match:
                 header_level = len(header_match.group(1))  # Count # characters
                 title = header_match.group(2).strip()
+
+                # Filter sections based on document type
+                should_extract_section = self._should_extract_section(
+                    title, header_level, classification.doc_type
+                )
+
+                if not should_extract_section:
+                    continue
 
                 # Create section
                 section_id = self._generate_section_id(title, file_path, commit_hash)
@@ -458,6 +479,14 @@ class MarkdownHierarchyParser:
             # Check for task items
             task_match = self.TASK_PATTERN.match(line)
             if task_match and current_section:
+                # Filter tasks based on document type and section
+                should_extract_task = self._should_extract_task(
+                    current_section.title, classification.doc_type
+                )
+
+                if not should_extract_task:
+                    continue
+
                 is_completed = task_match.group(1).lower() == 'x'
                 task_text = task_match.group(2).strip()
 
@@ -531,6 +560,67 @@ class MarkdownHierarchyParser:
                 break
 
         return '\n'.join(description_lines[:3])  # First 3 lines
+
+    def _should_extract_section(self, title: str, level: int, doc_type: DocumentType) -> bool:
+        """
+        Determine if a section should be extracted based on document type and heading level
+
+        Args:
+            title: Section title
+            level: Heading level (1-6, where 1 is #, 2 is ##, etc.)
+            doc_type: Document classification type
+
+        Returns:
+            True if section should be extracted
+        """
+        # HIGH_VALUE: Extract ## headings (level 2)
+        if doc_type == DocumentType.HIGH_VALUE:
+            return level == 2
+
+        # MEDIUM_VALUE: Extract only ## headings (level 2)
+        elif doc_type == DocumentType.MEDIUM_VALUE:
+            return level == 2
+
+        # LOW_VALUE: Extract only specific sections (TODO, Next Steps, etc.)
+        elif doc_type == DocumentType.LOW_VALUE:
+            title_lower = title.lower()
+            low_value_sections = [
+                'todo', 'next steps', 'action items', 'follow-up', 'future work'
+            ]
+            return any(pattern in title_lower for pattern in low_value_sections)
+
+        return False
+
+    def _should_extract_task(self, section_title: str, doc_type: DocumentType) -> bool:
+        """
+        Determine if tasks should be extracted from a section based on document type
+
+        Args:
+            section_title: Title of the current section
+            doc_type: Document classification type
+
+        Returns:
+            True if tasks should be extracted from this section
+        """
+        # HIGH_VALUE: Extract tasks only from high-value sections
+        if doc_type == DocumentType.HIGH_VALUE:
+            section_lower = section_title.lower()
+            high_value_sections = [
+                'deliverables', 'completed', 'components', 'next steps',
+                'todo', 'action items', 'tasks', 'backlog', 'phase', 'step', 'sprint'
+            ]
+            return any(pattern in section_lower for pattern in high_value_sections)
+
+        # MEDIUM_VALUE: No task extraction from design docs
+        elif doc_type == DocumentType.MEDIUM_VALUE:
+            return False
+
+        # LOW_VALUE: Extract tasks only from TODO sections
+        elif doc_type == DocumentType.LOW_VALUE:
+            section_lower = section_title.lower()
+            return any(pattern in section_lower for pattern in ['todo', 'next steps', 'action items'])
+
+        return False
 
 
 # ============================================================================
